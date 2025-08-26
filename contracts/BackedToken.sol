@@ -28,7 +28,7 @@ contract BackedToken is ERC20, Ownable {
         address stablecoinAddress,
         address oracleAddress,
         address bridgeAddress
-    ) ERC20("Backed Token", "BKT") {
+    ) ERC20("Backed Token", "BKT") Ownable(msg.sender) {
         stablecoin = IERC20(stablecoinAddress);
         oracle = IPriceOracle(oracleAddress);
         bridge = IBridge(bridgeAddress);
