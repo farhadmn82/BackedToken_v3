@@ -8,8 +8,11 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./OracleStub.sol";
 
 interface IBridge {
-    /// @notice Enqueue a redemption request for `account` of `amount` stablecoin.
-    function enqueueRedemption(address account, uint256 amount) external;
+    /// @notice Transfer `amount` of `token` to the bridge.
+    function sendStable(address token, uint256 amount) external;
+
+    /// @notice Send an arbitrary message through the bridge.
+    function sendMessage(bytes calldata message) external;
 }
 
 contract BackedToken is ERC20, Ownable {
@@ -41,7 +44,10 @@ contract BackedToken is ERC20, Ownable {
 
         uint256 tokenAmount = (stableAmount * PRICE_PRECISION) / price;
 
-        stablecoin.safeTransferFrom(msg.sender, address(bridge), stableAmount);
+        // Move stablecoin to this contract then forward it through the bridge.
+        stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
+        stablecoin.safeIncreaseAllowance(address(bridge), stableAmount);
+        bridge.sendStable(address(stablecoin), stableAmount);
         _mint(msg.sender, tokenAmount);
     }
 
@@ -56,7 +62,7 @@ contract BackedToken is ERC20, Ownable {
         uint256 stableAmount = (tokenAmount * price) / PRICE_PRECISION;
 
         _burn(msg.sender, tokenAmount);
-        bridge.enqueueRedemption(msg.sender, stableAmount);
+        bridge.sendMessage(abi.encode(msg.sender, stableAmount));
     }
 }
 
