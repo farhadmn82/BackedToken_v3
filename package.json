@@ -13,9 +13,12 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "hardhat": "^2.22.5",
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
-    "typescript": "^5.5.0",
-    "ts-node": "^10.9.1"
+    "hardhat": "^2.26.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0"
   }
 }
