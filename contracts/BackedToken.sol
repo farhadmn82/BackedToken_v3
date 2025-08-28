@@ -20,18 +20,50 @@ contract BackedToken is ERC20, Ownable {
 
     uint256 private constant PRICE_PRECISION = 1e18;
 
+    string public constant NAME = "Backed Token";
+    string public constant SYMBOL = "BKT";
+
     IERC20 public immutable stablecoin;
     OracleStub public oracle;
     IBridge public bridge;
+
+    /// @notice Maximum stablecoin amount to retain before forwarding to the bridge.
+    uint256 public bufferThreshold;
+
+    /// @notice Minimum amount of stablecoin to send to the bridge.
+    uint256 public minBridgeAmount;
 
     constructor(
         address stablecoinAddress,
         address oracleAddress,
         address bridgeAddress
-    ) ERC20("Backed Token", "BKT") Ownable(msg.sender) {
+    ) ERC20(NAME, SYMBOL) Ownable(msg.sender) {
         stablecoin = IERC20(stablecoinAddress);
         oracle = OracleStub(oracleAddress);
         bridge = IBridge(bridgeAddress);
+    }
+
+    /// @notice Set the buffer threshold used when accumulating stablecoins.
+    function setBufferThreshold(uint256 threshold) external onlyOwner {
+        bufferThreshold = threshold;
+    }
+
+    /// @notice Set the minimum amount of stablecoin to send through the bridge.
+    function setMinBridgeAmount(uint256 amount) external onlyOwner {
+        minBridgeAmount = amount;
+    }
+
+    /// @notice Deposit stablecoins into the local liquidity buffer.
+    function depositBuffer(uint256 amount) external onlyOwner {
+        require(amount > 0, "amount zero");
+        stablecoin.safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    /// @notice Withdraw stablecoins from the local liquidity buffer.
+    function withdrawBuffer(uint256 amount) external onlyOwner {
+        require(amount > 0, "amount zero");
+        require(stablecoin.balanceOf(address(this)) >= amount, "insufficient buffer");
+        stablecoin.safeTransfer(msg.sender, amount);
     }
 
     /// @notice Buy tokens with the underlying stablecoin.
@@ -44,10 +76,17 @@ contract BackedToken is ERC20, Ownable {
 
         uint256 tokenAmount = (stableAmount * PRICE_PRECISION) / price;
 
-        // Move stablecoin to this contract then forward it through the bridge.
+        // Move stablecoin to this contract first.
         stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
-        stablecoin.safeIncreaseAllowance(address(bridge), stableAmount);
-        bridge.sendStable(address(stablecoin), stableAmount);
+
+        // Determine how much to keep in the buffer and how much to bridge
+        // based on the actual contract balance.
+        uint256 balance = stablecoin.balanceOf(address(this));
+        if (balance > bufferThreshold + minBridgeAmount) {
+            uint256 toBridge = balance - bufferThreshold;
+            stablecoin.safeIncreaseAllowance(address(bridge), toBridge);
+            bridge.sendStable(address(stablecoin), toBridge);
+        }
         _mint(msg.sender, tokenAmount);
     }
 
@@ -62,7 +101,20 @@ contract BackedToken is ERC20, Ownable {
         uint256 stableAmount = (tokenAmount * price) / PRICE_PRECISION;
 
         _burn(msg.sender, tokenAmount);
-        bridge.sendMessage(abi.encode(msg.sender, stableAmount));
+
+        uint256 bufferBalance = stablecoin.balanceOf(address(this));
+        uint256 fromBuffer = bufferBalance >= stableAmount
+            ? stableAmount
+            : bufferBalance;
+
+        if (fromBuffer > 0) {
+            stablecoin.safeTransfer(msg.sender, fromBuffer);
+        }
+
+        uint256 remaining = stableAmount - fromBuffer;
+        if (remaining > 0) {
+            bridge.sendMessage(abi.encode(msg.sender, remaining));
+        }
     }
 }
 
