@@ -145,7 +145,6 @@ describe("BackedToken", function () {
 
     await backedToken.connect(owner).depositBuffer(depositAmount);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount);
-
     await backedToken.connect(owner).withdrawBuffer(withdrawAmount);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount - withdrawAmount);
   });
