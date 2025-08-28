@@ -2,6 +2,8 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
+const INITIAL_PRICE = ethers.parseUnits("2", 18);
+
 // Helper to deploy contracts for each test
 async function deployFixture() {
   const [owner, user] = await ethers.getSigners();
@@ -11,8 +13,7 @@ async function deployFixture() {
   await stablecoin.waitForDeployment();
 
   const Oracle = await ethers.getContractFactory("OracleStub");
-  const initialPrice = ethers.parseUnits("1", 18);
-  const oracle = await Oracle.deploy(initialPrice);
+  const oracle = await Oracle.deploy(INITIAL_PRICE);
   await oracle.waitForDeployment();
 
   const Bridge = await ethers.getContractFactory("BridgeStub");
@@ -23,9 +24,10 @@ async function deployFixture() {
   const backedToken = await Backed.deploy(stablecoin.target, oracle.target, bridge.target);
   await backedToken.waitForDeployment();
 
-  // Mint stablecoins to user for testing
-  const supply = ethers.parseUnits("1000", 18);
+  // Mint stablecoins to user and owner for testing
+  const supply = ethers.parseUnits("2000", 18);
   await stablecoin.mint(user.address, supply);
+  await stablecoin.mint(owner.address, supply);
 
   return { owner, user, stablecoin, oracle, bridge, backedToken };
 }
@@ -33,7 +35,7 @@ async function deployFixture() {
 describe("BackedToken", function () {
   it("retrieves price from oracle", async function () {
     const { oracle, owner } = await loadFixture(deployFixture);
-    const newPrice = ethers.parseUnits("2", 18);
+    const newPrice = ethers.parseUnits("3", 18);
     await oracle.connect(owner).setPrice(newPrice);
     expect(await oracle.getPrice()).to.equal(newPrice);
   });
@@ -79,17 +81,70 @@ describe("BackedToken", function () {
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
   });
 
+  it(
+    "allows purchasing token less than minBridgeAmount while keeping buffer (Empty Buffer)",
+    async function () {
+      const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(
+        deployFixture
+      );
+      const buyAmount = ethers.parseUnits("80", 18);
+      const threshold = ethers.parseUnits("50", 18);
+      const minBridge = ethers.parseUnits("50", 18);
+
+      await backedToken.connect(owner).setBufferThreshold(threshold);
+      await backedToken.connect(owner).setMinBridgeAmount(minBridge);
+      await stablecoin.connect(user).approve(backedToken.target, buyAmount);
+
+      const price = await oracle.getPrice();
+      const expectedTokens = (buyAmount * BigInt(1e18)) / price;
+
+      await backedToken.connect(user).buy(buyAmount);
+
+      const stableLiquidity = await stablecoin.balanceOf(backedToken.target);
+      const userBalance = await backedToken.balanceOf(user.address);
+
+      expect(userBalance).to.equal(expectedTokens);
+      expect(stableLiquidity).to.equal(buyAmount);
+    }
+  );
+
+  it(
+    "allows purchasing token less than minBridgeAmount while keeping buffer (Full Buffer)",
+    async function () {
+      const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(
+        deployFixture
+      );
+      const buyAmount = ethers.parseUnits("40", 18);
+      const threshold = ethers.parseUnits("50", 18);
+      const minBridge = ethers.parseUnits("50", 18);
+
+      await backedToken.connect(owner).setBufferThreshold(threshold);
+      await backedToken.connect(owner).setMinBridgeAmount(minBridge);
+      await stablecoin.connect(owner).approve(backedToken.target, threshold);
+      await backedToken.connect(owner).depositBuffer(threshold);
+      await stablecoin.connect(user).approve(backedToken.target, buyAmount);
+
+      const price = await oracle.getPrice();
+      const expectedTokens = (buyAmount * BigInt(1e18)) / price;
+
+      await backedToken.connect(user).buy(buyAmount);
+
+      const stableLiquidity = await stablecoin.balanceOf(backedToken.target);
+      const userBalance = await backedToken.balanceOf(user.address);
+
+      expect(userBalance).to.equal(expectedTokens);
+      expect(stableLiquidity).to.equal(threshold + buyAmount);
+    }
+  );
+
   it("allows owner to manage buffer", async function () {
     const { owner, stablecoin, backedToken } = await loadFixture(deployFixture);
     const depositAmount = ethers.parseUnits("20", 18);
     const withdrawAmount = ethers.parseUnits("5", 18);
-
-    await stablecoin.mint(owner.address, depositAmount);
     await stablecoin.connect(owner).approve(backedToken.target, depositAmount);
 
     await backedToken.connect(owner).depositBuffer(depositAmount);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount);
-
     await backedToken.connect(owner).withdrawBuffer(withdrawAmount);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount - withdrawAmount);
   });
@@ -98,14 +153,13 @@ describe("BackedToken", function () {
     const { user, owner, stablecoin, oracle, bridge, backedToken } = await loadFixture(deployFixture);
     const buyAmount = ethers.parseUnits("50", 18);
     const bufferDeposit = ethers.parseUnits("20", 18);
-    const redeemTokens = ethers.parseUnits("30", 18);
+    const redeemTokens = ethers.parseUnits("25", 18);
 
     // Buy tokens (all funds go through bridge since threshold is 0)
     await stablecoin.connect(user).approve(backedToken.target, buyAmount);
     await backedToken.connect(user).buy(buyAmount);
 
     // Owner deposits liquidity for redemptions
-    await stablecoin.mint(owner.address, bufferDeposit);
     await stablecoin.connect(owner).approve(backedToken.target, bufferDeposit);
     await backedToken.connect(owner).depositBuffer(bufferDeposit);
 
@@ -122,7 +176,7 @@ describe("BackedToken", function () {
 
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(0n);
     expect(await stablecoin.balanceOf(user.address)).to.equal(
-      ethers.parseUnits("1000", 18) - buyAmount + bufferDeposit
+      ethers.parseUnits("2000", 18) - buyAmount + bufferDeposit
     );
   });
 });
