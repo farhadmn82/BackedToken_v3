@@ -51,9 +51,16 @@ describe("BackedToken", function () {
     const price = await oracle.getPrice();
     const expectedTokens = buyAmount * BigInt(1e18) / price;
 
+    const message = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint8", "address", "uint256"],
+      [0, user.address, buyAmount]
+    );
+
     await expect(backedToken.connect(user).buy(buyAmount))
       .to.emit(bridge, "StableSent")
-      .withArgs(stablecoin.target, backedToken.target, buyAmount - threshold);
+      .withArgs(stablecoin.target, backedToken.target, buyAmount - threshold)
+      .and.to.emit(bridge, "MessageSent")
+      .withArgs(message);
 
     expect(await backedToken.balanceOf(user.address)).to.equal(expectedTokens);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
@@ -190,7 +197,7 @@ describe("BackedToken", function () {
   });
 
   it("queues and processes redemption when liquidity is added", async function () {
-    const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(deployFixture);
+    const { user, owner, stablecoin, oracle, backedToken, bridge } = await loadFixture(deployFixture);
     const buyAmount = ethers.parseUnits("50", 18);
     const redeemTokens = ethers.parseUnits("25", 18);
 
@@ -200,7 +207,14 @@ describe("BackedToken", function () {
     const price = await oracle.getPrice();
     const expectedPayout = (redeemTokens * price) / BigInt(1e18);
 
-    await backedToken.connect(user).redeem(redeemTokens);
+    const message = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint8", "address", "uint256"],
+      [1, user.address, expectedPayout]
+    );
+
+    await expect(backedToken.connect(user).redeem(redeemTokens))
+      .to.emit(bridge, "MessageSent")
+      .withArgs(message);
 
     expect(await backedToken.redemptionQueueLength()).to.equal(1n);
 
