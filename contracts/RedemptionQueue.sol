@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+/// @notice Library implementing a redemption queue using a mapping based
+/// structure with head and tail indices. Processing is performed in batches
+/// to cap gas usage per transaction.
 library RedemptionQueue {
     struct Redeem {
         address redeemer;
@@ -8,90 +11,76 @@ library RedemptionQueue {
     }
 
     struct Queue {
-        Redeem[] redeemList;
+        mapping(uint256 => Redeem) items;
         uint256 head;
+        uint256 tail;
     }
 
-    /// @notice Process pending redemptions given available liquidity and a new request.
+    /// @notice Process queued redemptions and optionally a new request.
     /// @param q Queue of pending redemptions.
-    /// @param redeemer Address requesting redemption.
+    /// @param redeemer Address requesting redemption. Zero address to skip.
     /// @param amount Amount requested for redemption.
-    /// @param available Available liquidity for payouts.
-    /// @return payables Redemptions that can be paid out now (FIFO).
+    /// @param available Stablecoin liquidity available for payouts.
+    /// @param maxToProcess Maximum number of queued entries to process.
+    /// @return payables Redemptions that should be paid out now.
     function process(
         Queue storage q,
         address redeemer,
         uint256 amount,
-        uint256 available
+        uint256 available,
+        uint256 maxToProcess
     ) internal returns (Redeem[] memory payables) {
-        uint256 len = q.redeemList.length;
-        uint256 temp = available;
-        uint256 count;
+        uint256 remaining = available;
+        uint256 processed = 0;
+        uint256 idx = q.head;
 
-        // First pass: count payable queued redemptions while skipping those too large.
-        for (uint256 i = q.head; i < len; i++) {
-            uint256 req = q.redeemList[i].amount;
-            if (req <= temp) {
-                temp -= req;
-                count++;
-            }
+        // Iterate through the queue up to the batch limit while funds allow.
+        while (
+            processed < maxToProcess &&
+            idx < q.tail &&
+            q.items[idx].amount <= remaining
+        ) {
+            remaining -= q.items[idx].amount;
+            idx++;
+            processed++;
         }
 
         bool considerNew = redeemer != address(0) && amount > 0;
-        bool newPayable = considerNew && amount <= temp;
-        uint256 total = count + (newPayable ? 1 : 0);
-        payables = new Redeem[](total);
+        bool newPayable =
+            considerNew &&
+            amount <= remaining &&
+            processed < maxToProcess;
 
-        // Second pass: collect payable redemptions and compact queue.
-        temp = available;
-        uint256 write = q.head;
-        uint256 pIndex;
-        for (uint256 i = q.head; i < len; i++) {
-            Redeem memory r = q.redeemList[i];
-            if (r.amount <= temp) {
-                temp -= r.amount;
-                payables[pIndex++] = r;
-            } else {
-                if (write != i) {
-                    q.redeemList[write] = r;
-                }
-                write++;
-            }
+        uint256 payoutCount = processed + (newPayable ? 1 : 0);
+        payables = new Redeem[](payoutCount);
+
+        // Collect payable redemptions and clear them from storage.
+        for (uint256 i = 0; i < processed; i++) {
+            Redeem storage r = q.items[q.head];
+            payables[i] = r;
+            delete q.items[q.head];
+            q.head++;
         }
 
-        // Remove processed entries from the end of the array.
-        while (q.redeemList.length > write) {
-            q.redeemList.pop();
-        }
-
-        // Compact storage occasionally to avoid growth.
-        if (q.head > 0 && q.head * 2 > q.redeemList.length) {
-            uint256 newLen = q.redeemList.length - q.head;
-            for (uint256 k = 0; k < newLen; k++) {
-                q.redeemList[k] = q.redeemList[q.head + k];
-            }
-            for (uint256 k = 0; k < q.head; k++) {
-                q.redeemList.pop();
-            }
-            q.head = 0;
-        }
-
-        // Handle new redemption if any.
+        // Handle new redemption request.
         if (considerNew) {
             if (newPayable) {
-                payables[pIndex] = Redeem({redeemer: redeemer, amount: amount});
+                payables[processed] = Redeem({redeemer: redeemer, amount: amount});
             } else {
-                q.redeemList.push(Redeem({redeemer: redeemer, amount: amount}));
+                q.items[q.tail] = Redeem({redeemer: redeemer, amount: amount});
+                q.tail++;
             }
         }
     }
 
+    /// @return Number of queued redemptions.
     function length(Queue storage q) internal view returns (uint256) {
-        return q.redeemList.length - q.head;
+        return q.tail - q.head;
     }
 
+    /// @notice Access a queued redemption by index.
     function get(Queue storage q, uint256 index) internal view returns (Redeem storage) {
-        return q.redeemList[q.head + index];
+        return q.items[q.head + index];
     }
 }
 
