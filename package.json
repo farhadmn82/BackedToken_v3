@@ -14,11 +14,23 @@
   "type": "commonjs",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "dotenv": "^17.2.1",
     "hardhat": "^2.26.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0"
-  }
+  },
+  "directories": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/farhadmn82/BackedToken_v3.git"
+  },
+  "bugs": {
+    "url": "https://github.com/farhadmn82/BackedToken_v3/issues"
+  },
+  "homepage": "https://github.com/farhadmn82/BackedToken_v3#readme"
 }
