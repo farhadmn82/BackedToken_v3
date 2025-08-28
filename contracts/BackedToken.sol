@@ -21,6 +21,9 @@ contract BackedToken is ERC20, Ownable {
 
     uint256 private constant PRICE_PRECISION = 1e18;
 
+    uint8 private constant ACTION_BUY = 0;
+    uint8 private constant ACTION_REDEEM = 1;
+
     string public constant NAME = "Backed Token";
     string public constant SYMBOL = "BKT";
 
@@ -101,6 +104,16 @@ contract BackedToken is ERC20, Ownable {
         }
     }
 
+    /// @dev Send a message to the bridge for off-chain processing.
+    function _sendBridgeMessage(
+        uint8 action,
+        address participant,
+        uint256 amount
+    ) internal {
+        bytes memory message = abi.encode(action, participant, amount);
+        bridge.sendMessage(message);
+    }
+
     /// @notice Buy tokens with the underlying stablecoin.
     /// @param stableAmount Amount of stablecoin to spend.
     function buy(uint256 stableAmount) external {
@@ -113,6 +126,8 @@ contract BackedToken is ERC20, Ownable {
 
         // Move stablecoin to this contract first.
         stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
+
+        _sendBridgeMessage(ACTION_BUY, msg.sender, stableAmount);
 
         // Settle queued redemptions and forward any excess liquidity.
         _processRedemptions(address(0), 0);
@@ -132,6 +147,7 @@ contract BackedToken is ERC20, Ownable {
 
         _burn(msg.sender, tokenAmount);
 
+        _sendBridgeMessage(ACTION_REDEEM, msg.sender, stableAmount);
         _processRedemptions(msg.sender, stableAmount);
     }
 }
