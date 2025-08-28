@@ -149,34 +149,71 @@ describe("BackedToken", function () {
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount - withdrawAmount);
   });
 
-  it("uses buffer on redeem before bridging", async function () {
-    const { user, owner, stablecoin, oracle, bridge, backedToken } = await loadFixture(deployFixture);
+  it("processes queued redemptions before forwarding excess", async function () {
+    const { owner, user, stablecoin, backedToken, bridge, oracle } = await loadFixture(
+      deployFixture
+    );
+
+    const threshold = ethers.parseUnits("30", 18);
+    const highMinBridge = ethers.parseUnits("100", 18);
+    const minBridge = ethers.parseUnits("5", 18);
+    const initialBuy = ethers.parseUnits("60", 18);
+
+    await backedToken.connect(owner).setBufferThreshold(threshold);
+    await backedToken.connect(owner).setMinBridgeAmount(highMinBridge);
+
+    await stablecoin.connect(owner).approve(backedToken.target, initialBuy);
+    await backedToken.connect(owner).buy(initialBuy);
+
+    const price = await oracle.getPrice();
+    const tokens = (initialBuy * BigInt(1e18)) / price;
+    await backedToken.connect(owner).transfer(user.address, tokens);
+
+    await backedToken.connect(owner).withdrawBuffer(initialBuy);
+    await backedToken.connect(owner).setMinBridgeAmount(minBridge);
+
+    await backedToken.connect(user).redeem(tokens);
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+
+    const buyAmount = ethers.parseUnits("100", 18);
+    await stablecoin.connect(user).approve(backedToken.target, buyAmount);
+
+    await expect(backedToken.connect(user).buy(buyAmount))
+      .to.emit(bridge, "StableSent")
+      .withArgs(stablecoin.target, backedToken.target, ethers.parseUnits("10", 18));
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(0n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
+    expect(await stablecoin.balanceOf(user.address)).to.equal(
+      ethers.parseUnits("2000", 18) - buyAmount + ethers.parseUnits("60", 18)
+    );
+  });
+
+  it("queues and processes redemption when liquidity is added", async function () {
+    const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(deployFixture);
     const buyAmount = ethers.parseUnits("50", 18);
-    const bufferDeposit = ethers.parseUnits("20", 18);
     const redeemTokens = ethers.parseUnits("25", 18);
 
-    // Buy tokens (all funds go through bridge since threshold is 0)
     await stablecoin.connect(user).approve(backedToken.target, buyAmount);
     await backedToken.connect(user).buy(buyAmount);
 
-    // Owner deposits liquidity for redemptions
-    await stablecoin.connect(owner).approve(backedToken.target, bufferDeposit);
-    await backedToken.connect(owner).depositBuffer(bufferDeposit);
-
     const price = await oracle.getPrice();
-    const expectedBridge = (redeemTokens * price) / BigInt(1e18) - bufferDeposit;
-    const encoded = ethers.AbiCoder.defaultAbiCoder().encode([
-      "address",
-      "uint256",
-    ], [user.address, expectedBridge]);
+    const expectedPayout = (redeemTokens * price) / BigInt(1e18);
 
-    await expect(backedToken.connect(user).redeem(redeemTokens))
-      .to.emit(bridge, "MessageSent")
-      .withArgs(encoded);
+    await backedToken.connect(user).redeem(redeemTokens);
 
-    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(0n);
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+
+    await stablecoin.connect(owner).approve(backedToken.target, expectedPayout);
+    await backedToken.connect(owner).depositBuffer(expectedPayout);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+
+    await backedToken.processRedemptions(ethers.ZeroAddress, 0);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(0n);
     expect(await stablecoin.balanceOf(user.address)).to.equal(
-      ethers.parseUnits("2000", 18) - buyAmount + bufferDeposit
+      ethers.parseUnits("2000", 18) - buyAmount + expectedPayout
     );
   });
 });
