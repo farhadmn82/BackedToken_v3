@@ -62,6 +62,7 @@ contract BackedToken is ERC20, Ownable {
     function depositBuffer(uint256 amount) external onlyOwner {
         require(amount > 0, "amount zero");
         stablecoin.safeTransferFrom(msg.sender, address(this), amount);
+        _processRedemptions(address(0), 0);
     }
 
     /// @notice Withdraw stablecoins from the local liquidity buffer.
@@ -79,7 +80,7 @@ contract BackedToken is ERC20, Ownable {
     /// available buffer liquidity.
     /// @param redeemer Address requesting redemption (zero to process queue only).
     /// @param amount Amount requested for redemption.
-    function processRedemptions(address redeemer, uint256 amount) public {
+    function _processRedemptions(address redeemer, uint256 amount) internal {
         RedemptionQueue.Redeem[] memory payouts = redemptionQueue.process(
             redeemer,
             amount,
@@ -114,7 +115,7 @@ contract BackedToken is ERC20, Ownable {
         stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
 
         // Settle queued redemptions and forward any excess liquidity.
-        processRedemptions(address(0), 0);
+        _processRedemptions(address(0), 0);
         forwardExcessToBridge();
         _mint(msg.sender, tokenAmount);
     }
@@ -131,7 +132,7 @@ contract BackedToken is ERC20, Ownable {
 
         _burn(msg.sender, tokenAmount);
 
-        processRedemptions(msg.sender, stableAmount);
+        _processRedemptions(msg.sender, stableAmount);
     }
 }
 

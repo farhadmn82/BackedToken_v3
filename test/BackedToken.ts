@@ -207,10 +207,6 @@ describe("BackedToken", function () {
     await stablecoin.connect(owner).approve(backedToken.target, expectedPayout);
     await backedToken.connect(owner).depositBuffer(expectedPayout);
 
-    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
-
-    await backedToken.processRedemptions(ethers.ZeroAddress, 0);
-
     expect(await backedToken.redemptionQueueLength()).to.equal(0n);
     expect(await stablecoin.balanceOf(user.address)).to.equal(
       ethers.parseUnits("2000", 18) - buyAmount + expectedPayout
