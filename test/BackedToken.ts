@@ -226,4 +226,71 @@ describe("BackedToken", function () {
       ethers.parseUnits("2000", 18) - buyAmount + expectedPayout
     );
   });
+
+  it("pays smaller queued request even when earlier exceeds liquidity", async function () {
+    const { owner, user, stablecoin, backedToken } = await loadFixture(deployFixture);
+
+    const buyAmount = ethers.parseUnits("200", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
+    await backedToken.connect(owner).buy(buyAmount);
+
+    const bigTokens = ethers.parseUnits("50", 18);
+    await backedToken.connect(owner).transfer(user.address, bigTokens);
+
+    await backedToken.connect(user).redeem(bigTokens);
+
+    const smallTokens = ethers.parseUnits("20", 18);
+    await backedToken.connect(owner).redeem(smallTokens);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(2n);
+
+    const deposit = ethers.parseUnits("60", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit);
+    await backedToken.connect(owner).depositBuffer(deposit);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+    expect(await stablecoin.balanceOf(owner.address)).to.equal(
+      ethers.parseUnits("1780", 18)
+    );
+    expect(await stablecoin.balanceOf(user.address)).to.equal(
+      ethers.parseUnits("2000", 18)
+    );
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(
+      ethers.parseUnits("20", 18)
+    );
+  });
+
+  it("pays new small redemption despite earlier oversized request", async function () {
+    const { owner, user, stablecoin, backedToken } = await loadFixture(deployFixture);
+
+    const buyAmount = ethers.parseUnits("200", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
+    await backedToken.connect(owner).buy(buyAmount);
+
+    const bigTokens = ethers.parseUnits("50", 18);
+    await backedToken.connect(owner).transfer(user.address, bigTokens);
+
+    await backedToken.connect(user).redeem(bigTokens);
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+
+    const deposit = ethers.parseUnits("60", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit);
+    await backedToken.connect(owner).depositBuffer(deposit);
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit);
+
+    const smallTokens = ethers.parseUnits("20", 18);
+    await backedToken.connect(owner).redeem(smallTokens);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+    expect(await stablecoin.balanceOf(owner.address)).to.equal(
+      ethers.parseUnits("1780", 18)
+    );
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(
+      ethers.parseUnits("20", 18)
+    );
+    expect(await stablecoin.balanceOf(user.address)).to.equal(
+      ethers.parseUnits("2000", 18)
+    );
+  });
 });
