@@ -236,6 +236,7 @@ describe("BackedToken", function () {
 
     const bigTokens = ethers.parseUnits("50", 18);
     await backedToken.connect(owner).transfer(user.address, bigTokens);
+
     await backedToken.connect(user).redeem(bigTokens);
 
     const smallTokens = ethers.parseUnits("20", 18);
@@ -280,12 +281,14 @@ describe("BackedToken", function () {
     const deposit = ethers.parseUnits("60", 18);
     await stablecoin.connect(owner).approve(backedToken.target, deposit);
     await backedToken.connect(owner).depositBuffer(deposit);
+
     // Still waiting for big request
     expect(await backedToken.redemptionQueueLength()).to.equal(1n);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit);
 
     const smallTokens = ethers.parseUnits("20", 18);
     await backedToken.connect(owner).redeem(smallTokens);
+
     // Small request queued behind big one
     expect(await backedToken.redemptionQueueLength()).to.equal(2n);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit);
