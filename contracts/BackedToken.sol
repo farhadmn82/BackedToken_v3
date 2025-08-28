@@ -27,6 +27,9 @@ contract BackedToken is ERC20, Ownable {
     string public constant NAME = "Backed Token";
     string public constant SYMBOL = "BKT";
 
+    /// @notice Maximum number of queued redemptions to process per call.
+    uint256 private constant MAX_REDEMPTIONS_PER_CALL = 5;
+
     IERC20 public immutable stablecoin;
     OracleStub public oracle;
     IBridge public bridge;
@@ -87,7 +90,8 @@ contract BackedToken is ERC20, Ownable {
         RedemptionQueue.Redeem[] memory payouts = redemptionQueue.process(
             redeemer,
             amount,
-            stablecoin.balanceOf(address(this))
+            stablecoin.balanceOf(address(this)),
+            MAX_REDEMPTIONS_PER_CALL
         );
         for (uint256 i = 0; i < payouts.length; i++) {
             stablecoin.safeTransfer(payouts[i].redeemer, payouts[i].amount);

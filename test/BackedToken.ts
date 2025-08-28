@@ -226,4 +226,99 @@ describe("BackedToken", function () {
       ethers.parseUnits("2000", 18) - buyAmount + expectedPayout
     );
   });
+
+  it("does not pay smaller queued request when earlier exceeds liquidity", async function () {
+    const { owner, user, stablecoin, backedToken } = await loadFixture(deployFixture);
+
+    const buyAmount = ethers.parseUnits("200", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
+    await backedToken.connect(owner).buy(buyAmount);
+
+    const bigTokens = ethers.parseUnits("50", 18);
+    await backedToken.connect(owner).transfer(user.address, bigTokens);
+    await backedToken.connect(user).redeem(bigTokens);
+
+    const smallTokens = ethers.parseUnits("20", 18);
+    await backedToken.connect(owner).redeem(smallTokens);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(2n);
+
+    const deposit1 = ethers.parseUnits("60", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit1);
+    await backedToken.connect(owner).depositBuffer(deposit1);
+    // Liquidity insufficient for first request
+    expect(await backedToken.redemptionQueueLength()).to.equal(2n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit1);
+
+    const deposit2 = ethers.parseUnits("40", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit2);
+    await backedToken.connect(owner).depositBuffer(deposit2);
+    // First request paid, second still queued
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(0);
+
+    const deposit3 = ethers.parseUnits("40", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit3);
+    await backedToken.connect(owner).depositBuffer(deposit3);
+    // Second request now paid
+    expect(await backedToken.redemptionQueueLength()).to.equal(0n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(0);
+  });
+
+  it("queues new small redemption when earlier oversized request exists", async function () {
+    const { owner, user, stablecoin, backedToken } = await loadFixture(deployFixture);
+
+    const buyAmount = ethers.parseUnits("200", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
+    await backedToken.connect(owner).buy(buyAmount);
+
+    const bigTokens = ethers.parseUnits("50", 18);
+    await backedToken.connect(owner).transfer(user.address, bigTokens);
+    await backedToken.connect(user).redeem(bigTokens);
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+
+    const deposit = ethers.parseUnits("60", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, deposit);
+    await backedToken.connect(owner).depositBuffer(deposit);
+    // Still waiting for big request
+    expect(await backedToken.redemptionQueueLength()).to.equal(1n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit);
+
+    const smallTokens = ethers.parseUnits("20", 18);
+    await backedToken.connect(owner).redeem(smallTokens);
+    // Small request queued behind big one
+    expect(await backedToken.redemptionQueueLength()).to.equal(2n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(deposit);
+  });
+
+  it("processes redemptions in batches", async function () {
+    const { owner, stablecoin, backedToken, oracle } = await loadFixture(deployFixture);
+
+    const buyAmount = ethers.parseUnits("400", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
+    await backedToken.connect(owner).buy(buyAmount);
+
+    const price = await oracle.getPrice();
+    const redeemTokens = ethers.parseUnits("10", 18);
+    const payout = (redeemTokens * price) / BigInt(1e18);
+
+    for (let i = 0; i < 7; i++) {
+      await backedToken.connect(owner).redeem(redeemTokens);
+    }
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(7n);
+
+    const depositAll = payout * 7n;
+    await stablecoin.connect(owner).approve(backedToken.target, depositAll);
+    await backedToken.connect(owner).depositBuffer(depositAll);
+
+    // Only five requests processed in first batch
+    expect(await backedToken.redemptionQueueLength()).to.equal(2n);
+    expect(await stablecoin.balanceOf(backedToken.target)).to.equal(payout * 2n);
+
+    await stablecoin.connect(owner).approve(backedToken.target, payout);
+    await backedToken.connect(owner).depositBuffer(payout);
+
+    expect(await backedToken.redemptionQueueLength()).to.equal(0n);
+  });
 });
