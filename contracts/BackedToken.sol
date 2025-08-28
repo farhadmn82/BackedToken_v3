@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./OracleStub.sol";
+import "./RedemptionQueue.sol";
 
 interface IBridge {
     /// @notice Transfer `amount` of `token` to the bridge.
@@ -32,6 +33,10 @@ contract BackedToken is ERC20, Ownable {
 
     /// @notice Minimum amount of stablecoin to send to the bridge.
     uint256 public minBridgeAmount;
+
+    using RedemptionQueue for RedemptionQueue.Queue;
+
+    RedemptionQueue.Queue private redemptionQueue;
 
     constructor(
         address stablecoinAddress,
@@ -66,6 +71,35 @@ contract BackedToken is ERC20, Ownable {
         stablecoin.safeTransfer(msg.sender, amount);
     }
 
+    function redemptionQueueLength() external view returns (uint256) {
+        return redemptionQueue.length();
+    }
+
+    /// @notice Process queued redemptions and optionally a new request using
+    /// available buffer liquidity.
+    /// @param redeemer Address requesting redemption (zero to process queue only).
+    /// @param amount Amount requested for redemption.
+    function processRedemptions(address redeemer, uint256 amount) public {
+        RedemptionQueue.Redeem[] memory payouts = redemptionQueue.process(
+            redeemer,
+            amount,
+            stablecoin.balanceOf(address(this))
+        );
+        for (uint256 i = 0; i < payouts.length; i++) {
+            stablecoin.safeTransfer(payouts[i].redeemer, payouts[i].amount);
+        }
+    }
+
+    /// @notice Forward excess buffer liquidity to the bridge.
+    function forwardExcessToBridge() public {
+        uint256 balance = stablecoin.balanceOf(address(this));
+        if (balance > bufferThreshold + minBridgeAmount) {
+            uint256 toBridge = balance - bufferThreshold;
+            stablecoin.safeIncreaseAllowance(address(bridge), toBridge);
+            bridge.sendStable(address(stablecoin), toBridge);
+        }
+    }
+
     /// @notice Buy tokens with the underlying stablecoin.
     /// @param stableAmount Amount of stablecoin to spend.
     function buy(uint256 stableAmount) external {
@@ -79,14 +113,9 @@ contract BackedToken is ERC20, Ownable {
         // Move stablecoin to this contract first.
         stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
 
-        // Determine how much to keep in the buffer and how much to bridge
-        // based on the actual contract balance.
-        uint256 balance = stablecoin.balanceOf(address(this));
-        if (balance > bufferThreshold + minBridgeAmount) {
-            uint256 toBridge = balance - bufferThreshold;
-            stablecoin.safeIncreaseAllowance(address(bridge), toBridge);
-            bridge.sendStable(address(stablecoin), toBridge);
-        }
+        // Settle queued redemptions and forward any excess liquidity.
+        processRedemptions(address(0), 0);
+        forwardExcessToBridge();
         _mint(msg.sender, tokenAmount);
     }
 
@@ -102,19 +131,7 @@ contract BackedToken is ERC20, Ownable {
 
         _burn(msg.sender, tokenAmount);
 
-        uint256 bufferBalance = stablecoin.balanceOf(address(this));
-        uint256 fromBuffer = bufferBalance >= stableAmount
-            ? stableAmount
-            : bufferBalance;
-
-        if (fromBuffer > 0) {
-            stablecoin.safeTransfer(msg.sender, fromBuffer);
-        }
-
-        uint256 remaining = stableAmount - fromBuffer;
-        if (remaining > 0) {
-            bridge.sendMessage(abi.encode(msg.sender, remaining));
-        }
+        processRedemptions(msg.sender, stableAmount);
     }
 }
 
