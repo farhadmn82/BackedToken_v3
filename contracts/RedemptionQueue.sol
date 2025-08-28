@@ -46,10 +46,12 @@ library RedemptionQueue {
         }
 
         bool considerNew = redeemer != address(0) && amount > 0;
+        bool allItemsAreProcessed = q.tail == idx;
         bool newPayable =
             considerNew &&
             amount <= remaining &&
-            processed < maxToProcess;
+            processed < maxToProcess &&
+            allItemsAreProcessed;
 
         uint256 payoutCount = processed + (newPayable ? 1 : 0);
         payables = new Redeem[](payoutCount);
