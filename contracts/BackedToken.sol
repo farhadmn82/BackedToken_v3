@@ -44,6 +44,11 @@ contract BackedToken is ERC20, Ownable {
 
     RedemptionQueue.Queue private redemptionQueue;
 
+    event TokensBought(address indexed buyer, uint256 stableAmount, uint256 tokenAmount);
+    event TokensRedeemed(address indexed redeemer, uint256 tokenAmount, uint256 stableAmount);
+    event BufferThresholdUpdated(uint256 newThreshold);
+    event MinBridgeAmountUpdated(uint256 newMin);
+
     constructor(
         address stablecoinAddress,
         address oracleAddress,
@@ -57,11 +62,13 @@ contract BackedToken is ERC20, Ownable {
     /// @notice Set the buffer threshold used when accumulating stablecoins.
     function setBufferThreshold(uint256 threshold) external onlyOwner {
         bufferThreshold = threshold;
+        emit BufferThresholdUpdated(threshold);
     }
 
     /// @notice Set the minimum amount of stablecoin to send through the bridge.
     function setMinBridgeAmount(uint256 amount) external onlyOwner {
         minBridgeAmount = amount;
+        emit MinBridgeAmountUpdated(amount);
     }
 
     /// @notice Deposit stablecoins into the local liquidity buffer.
@@ -137,6 +144,7 @@ contract BackedToken is ERC20, Ownable {
         _processRedemptions(address(0), 0);
         forwardExcessToBridge();
         _mint(msg.sender, tokenAmount);
+        emit TokensBought(msg.sender, stableAmount, tokenAmount);
     }
 
     /// @notice Redeem tokens for the underlying stablecoin through the bridge.
@@ -153,6 +161,7 @@ contract BackedToken is ERC20, Ownable {
 
         _sendBridgeMessage(ACTION_REDEEM, msg.sender, stableAmount);
         _processRedemptions(msg.sender, stableAmount);
+        emit TokensRedeemed(msg.sender, tokenAmount, stableAmount);
     }
 }
 
