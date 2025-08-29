@@ -40,6 +40,20 @@ describe("BackedToken", function () {
     expect(await oracle.getPrice()).to.equal(newPrice);
   });
 
+  it("emits parameter update events", async function () {
+    const { owner, backedToken } = await loadFixture(deployFixture);
+    const threshold = ethers.parseUnits("10", 18);
+    const minBridge = ethers.parseUnits("5", 18);
+
+    await expect(backedToken.connect(owner).setBufferThreshold(threshold))
+      .to.emit(backedToken, "BufferThresholdUpdated")
+      .withArgs(threshold);
+
+    await expect(backedToken.connect(owner).setMinBridgeAmount(minBridge))
+      .to.emit(backedToken, "MinBridgeAmountUpdated")
+      .withArgs(minBridge);
+  });
+
   it("allows purchasing tokens while keeping buffer", async function () {
     const { user, owner, stablecoin, oracle, bridge, backedToken } = await loadFixture(deployFixture);
     const buyAmount = ethers.parseUnits("100", 18);
@@ -60,7 +74,9 @@ describe("BackedToken", function () {
       .to.emit(bridge, "StableSent")
       .withArgs(stablecoin.target, backedToken.target, buyAmount - threshold)
       .and.to.emit(bridge, "MessageSent")
-      .withArgs(message);
+      .withArgs(message)
+      .and.to.emit(backedToken, "TokensBought")
+      .withArgs(user.address, buyAmount, expectedTokens);
 
     expect(await backedToken.balanceOf(user.address)).to.equal(expectedTokens);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
@@ -214,7 +230,9 @@ describe("BackedToken", function () {
 
     await expect(backedToken.connect(user).redeem(redeemTokens))
       .to.emit(bridge, "MessageSent")
-      .withArgs(message);
+      .withArgs(message)
+      .and.to.emit(backedToken, "TokensRedeemed")
+      .withArgs(user.address, redeemTokens, expectedPayout);
 
     expect(await backedToken.redemptionQueueLength()).to.equal(1n);
 
