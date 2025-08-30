@@ -3,10 +3,11 @@ import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 const INITIAL_PRICE = ethers.parseUnits("2", 18);
+const PRECISION = ethers.parseUnits("1", 18);
 
 // Helper to deploy contracts for each test
 async function deployFixture() {
-  const [owner, user] = await ethers.getSigners();
+  const [owner, user, feeCollector] = await ethers.getSigners();
 
   const Stable = await ethers.getContractFactory("StablecoinMock");
   const stablecoin = await Stable.deploy();
@@ -16,12 +17,20 @@ async function deployFixture() {
   const oracle = await Oracle.deploy(INITIAL_PRICE);
   await oracle.waitForDeployment();
 
+  const PriceStrategy = await ethers.getContractFactory("PriceStrategy");
+  const priceStrategy = await PriceStrategy.deploy(oracle.target, feeCollector.address);
+  await priceStrategy.waitForDeployment();
+
   const Bridge = await ethers.getContractFactory("BridgeStub");
   const bridge = await Bridge.deploy();
   await bridge.waitForDeployment();
 
   const Backed = await ethers.getContractFactory("BackedToken");
-  const backedToken = await Backed.deploy(stablecoin.target, oracle.target, bridge.target);
+  const backedToken = await Backed.deploy(
+    stablecoin.target,
+    priceStrategy.target,
+    bridge.target
+  );
   await backedToken.waitForDeployment();
 
   // Mint stablecoins to user and owner for testing
@@ -29,7 +38,7 @@ async function deployFixture() {
   await stablecoin.mint(user.address, supply);
   await stablecoin.mint(owner.address, supply);
 
-  return { owner, user, stablecoin, oracle, bridge, backedToken };
+  return { owner, user, feeCollector, stablecoin, oracle, priceStrategy, bridge, backedToken };
 }
 
 describe("BackedToken", function () {
@@ -52,6 +61,60 @@ describe("BackedToken", function () {
     await expect(backedToken.connect(owner).setMinBridgeAmount(minBridge))
       .to.emit(backedToken, "MinBridgeAmountUpdated")
       .withArgs(minBridge);
+  });
+
+  it("applies spreads and fees via PriceStrategy", async function () {
+    const {
+      owner,
+      user,
+      feeCollector,
+      stablecoin,
+      oracle,
+      priceStrategy,
+      backedToken,
+    } = await loadFixture(deployFixture);
+
+    const buySpread = ethers.parseUnits("0.01", 18); // 1%
+    const redeemSpread = ethers.parseUnits("0.02", 18); // 2%
+    const buyFee = ethers.parseUnits("1", 18);
+    const redeemFee = ethers.parseUnits("2", 18);
+
+    await priceStrategy.connect(owner).setBuySpread(buySpread);
+    await priceStrategy.connect(owner).setRedeemSpread(redeemSpread);
+    await priceStrategy.connect(owner).setBuyFee(buyFee);
+    await priceStrategy.connect(owner).setRedeemFee(redeemFee);
+
+    // Keep all stablecoins in contract for redemption
+    const highThreshold = ethers.parseUnits("1000", 18);
+    await backedToken.connect(owner).setBufferThreshold(highThreshold);
+
+    const buyAmount = ethers.parseUnits("100", 18);
+    await stablecoin.connect(user).approve(backedToken.target, buyAmount);
+
+    const basePrice = await oracle.getPrice();
+    const buyPrice = basePrice + (basePrice * buySpread) / PRECISION;
+    const netBuy = buyAmount - buyFee;
+    const expectedTokens = (netBuy * PRECISION) / buyPrice;
+
+    await expect(backedToken.connect(user).buy(buyAmount))
+      .to.emit(backedToken, "TokensBought")
+      .withArgs(user.address, netBuy, expectedTokens);
+
+    expect(await stablecoin.balanceOf(feeCollector.address)).to.equal(buyFee);
+    expect(await backedToken.balanceOf(user.address)).to.equal(expectedTokens);
+
+    const redeemPrice = basePrice - (basePrice * redeemSpread) / PRECISION;
+    const grossRedeem = (expectedTokens * redeemPrice) / PRECISION;
+    const netRedeem = grossRedeem - redeemFee;
+
+    await expect(backedToken.connect(user).redeem(expectedTokens))
+      .to.emit(backedToken, "TokensRedeemed")
+      .withArgs(user.address, expectedTokens, netRedeem);
+
+    expect(await stablecoin.balanceOf(feeCollector.address)).to.equal(
+      buyFee + redeemFee
+    );
+    expect(await backedToken.balanceOf(user.address)).to.equal(0n);
   });
 
   it("allows purchasing tokens while keeping buffer", async function () {
