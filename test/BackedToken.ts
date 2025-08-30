@@ -70,9 +70,11 @@ describe("BackedToken", function () {
       [0, user.address, buyAmount]
     );
 
+    const bridged = buyAmount - threshold;
+
     await expect(backedToken.connect(user).buy(buyAmount))
       .to.emit(bridge, "StableSent")
-      .withArgs(stablecoin.target, backedToken.target, buyAmount - threshold)
+      .withArgs(stablecoin.target, backedToken.target, bridged)
       .and.to.emit(bridge, "MessageSent")
       .withArgs(message)
       .and.to.emit(backedToken, "TokensBought")
@@ -80,6 +82,12 @@ describe("BackedToken", function () {
 
     expect(await backedToken.balanceOf(user.address)).to.equal(expectedTokens);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(bridged);
+
+    await expect(bridge.connect(owner).receiveStable(stablecoin.target, bridged))
+      .to.emit(bridge, "StableReceived")
+      .withArgs(stablecoin.target, owner.address, bridged);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(0);
   });
 
   it("only bridges when amount exceeds minimum", async function () {
@@ -96,20 +104,26 @@ describe("BackedToken", function () {
 
     await expect(backedToken.connect(user).buy(firstBuy)).to.not.emit(bridge, "StableSent");
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(firstBuy);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(0);
 
     const expectedBridge = firstBuy + secondBuy - threshold;
     await expect(backedToken.connect(user).buy(secondBuy))
       .to.emit(bridge, "StableSent")
       .withArgs(stablecoin.target, backedToken.target, expectedBridge);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(expectedBridge);
+
+    await expect(bridge.connect(owner).receiveStable(stablecoin.target, expectedBridge))
+      .to.emit(bridge, "StableReceived")
+      .withArgs(stablecoin.target, owner.address, expectedBridge);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(0);
   });
 
   it(
     "allows purchasing token less than minBridgeAmount while keeping buffer (Empty Buffer)",
     async function () {
-      const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(
-        deployFixture
-      );
+      const { user, owner, stablecoin, oracle, backedToken, bridge } =
+        await loadFixture(deployFixture);
       const buyAmount = ethers.parseUnits("80", 18);
       const threshold = ethers.parseUnits("50", 18);
       const minBridge = ethers.parseUnits("50", 18);
@@ -124,19 +138,20 @@ describe("BackedToken", function () {
       await backedToken.connect(user).buy(buyAmount);
 
       const stableLiquidity = await stablecoin.balanceOf(backedToken.target);
+      const bridgeBalance = await stablecoin.balanceOf(bridge.target);
       const userBalance = await backedToken.balanceOf(user.address);
 
       expect(userBalance).to.equal(expectedTokens);
       expect(stableLiquidity).to.equal(buyAmount);
+      expect(bridgeBalance).to.equal(0);
     }
   );
 
   it(
     "allows purchasing token less than minBridgeAmount while keeping buffer (Full Buffer)",
     async function () {
-      const { user, owner, stablecoin, oracle, backedToken } = await loadFixture(
-        deployFixture
-      );
+      const { user, owner, stablecoin, oracle, backedToken, bridge } =
+        await loadFixture(deployFixture);
       const buyAmount = ethers.parseUnits("40", 18);
       const threshold = ethers.parseUnits("50", 18);
       const minBridge = ethers.parseUnits("50", 18);
@@ -153,10 +168,12 @@ describe("BackedToken", function () {
       await backedToken.connect(user).buy(buyAmount);
 
       const stableLiquidity = await stablecoin.balanceOf(backedToken.target);
+      const bridgeBalance = await stablecoin.balanceOf(bridge.target);
       const userBalance = await backedToken.balanceOf(user.address);
 
       expect(userBalance).to.equal(expectedTokens);
       expect(stableLiquidity).to.equal(threshold + buyAmount);
+      expect(bridgeBalance).to.equal(0);
     }
   );
 
@@ -201,15 +218,22 @@ describe("BackedToken", function () {
     const buyAmount = ethers.parseUnits("100", 18);
     await stablecoin.connect(user).approve(backedToken.target, buyAmount);
 
+    const expectedBridge = ethers.parseUnits("10", 18);
     await expect(backedToken.connect(user).buy(buyAmount))
       .to.emit(bridge, "StableSent")
-      .withArgs(stablecoin.target, backedToken.target, ethers.parseUnits("10", 18));
+      .withArgs(stablecoin.target, backedToken.target, expectedBridge);
 
     expect(await backedToken.redemptionQueueLength()).to.equal(0n);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(expectedBridge);
     expect(await stablecoin.balanceOf(user.address)).to.equal(
       ethers.parseUnits("2000", 18) - buyAmount + ethers.parseUnits("60", 18)
     );
+
+    await expect(bridge.connect(owner).receiveStable(stablecoin.target, expectedBridge))
+      .to.emit(bridge, "StableReceived")
+      .withArgs(stablecoin.target, owner.address, expectedBridge);
+    expect(await stablecoin.balanceOf(bridge.target)).to.equal(0);
   });
 
   it("queues and processes redemption when liquidity is added", async function () {

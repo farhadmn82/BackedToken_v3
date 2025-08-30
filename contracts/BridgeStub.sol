@@ -9,6 +9,7 @@ contract BridgeStub {
     using SafeERC20 for IERC20;
 
     event StableSent(address indexed token, address indexed from, uint256 amount);
+    event StableReceived(address indexed token, address indexed to, uint256 amount);
     event MessageSent(bytes message);
 
     /// @notice Simulate sending stablecoins through the bridge.
@@ -23,10 +24,14 @@ contract BridgeStub {
     }
 
     // ---------------------------------------------------------------------
-    // The functions below are placeholders for tests on the receiving side.
+    // Functions used to simulate the receiving side in tests.
     // ---------------------------------------------------------------------
 
-    function receiveStable(address /*token*/, uint256 /*amount*/) external {}
+    /// @notice Simulate receiving stablecoins from the bridge.
+    function receiveStable(address token, uint256 amount) external {
+        IERC20(token).safeTransfer(msg.sender, amount);
+        emit StableReceived(token, msg.sender, amount);
+    }
 
     function receiveMessage(bytes calldata /*message*/) external {}
 }

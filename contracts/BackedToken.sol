@@ -135,8 +135,11 @@ contract BackedToken is ERC20, Ownable {
 
         uint256 tokenAmount = (stableAmount * PRICE_PRECISION) / price;
 
-        // Move stablecoin to this contract first.
+        // Move stablecoin to this contract first and verify full amount received.
+        uint256 balanceBefore = stablecoin.balanceOf(address(this));
         stablecoin.safeTransferFrom(msg.sender, address(this), stableAmount);
+        uint256 received = stablecoin.balanceOf(address(this)) - balanceBefore;
+        require(received == stableAmount, "stablecoin mismatch");
 
         _sendBridgeMessage(ACTION_BUY, msg.sender, stableAmount);
 
