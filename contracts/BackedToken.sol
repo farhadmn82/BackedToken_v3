@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./OracleStub.sol";
+import "./PriceStrategy.sol";
 import "./RedemptionQueue.sol";
 
 interface IBridge {
@@ -31,7 +31,7 @@ contract BackedToken is ERC20, Ownable {
     uint256 private constant MAX_REDEMPTIONS_PER_CALL = 5;
 
     IERC20 public immutable stablecoin;
-    OracleStub public oracle;
+    PriceStrategy public priceStrategy;
     IBridge public bridge;
 
     /// @notice Maximum stablecoin amount to retain before forwarding to the bridge.
@@ -51,12 +51,17 @@ contract BackedToken is ERC20, Ownable {
 
     constructor(
         address stablecoinAddress,
-        address oracleAddress,
+        address priceStrategyAddress,
         address bridgeAddress
     ) ERC20(NAME, SYMBOL) Ownable(msg.sender) {
         stablecoin = IERC20(stablecoinAddress);
-        oracle = OracleStub(oracleAddress);
+        priceStrategy = PriceStrategy(priceStrategyAddress);
         bridge = IBridge(bridgeAddress);
+    }
+
+    /// @notice Set the price strategy module.
+    function setPriceStrategy(address strategy) external onlyOwner {
+        priceStrategy = PriceStrategy(strategy);
     }
 
     /// @notice Set the buffer threshold used when accumulating stablecoins.
@@ -130,10 +135,12 @@ contract BackedToken is ERC20, Ownable {
     function buy(uint256 stableAmount) external {
         require(stableAmount > 0, "amount zero");
 
-        uint256 price = oracle.getPrice();
+        (uint256 price, uint256 fee) = priceStrategy.buyPrice();
         require(price > 0, "invalid price");
+        require(stableAmount > fee, "amount too small");
 
-        uint256 tokenAmount = (stableAmount * PRICE_PRECISION) / price;
+        uint256 netAmount = stableAmount - fee;
+        uint256 tokenAmount = (netAmount * PRICE_PRECISION) / price;
 
         // Move stablecoin to this contract first and verify full amount received.
         uint256 balanceBefore = stablecoin.balanceOf(address(this));
@@ -141,13 +148,17 @@ contract BackedToken is ERC20, Ownable {
         uint256 received = stablecoin.balanceOf(address(this)) - balanceBefore;
         require(received == stableAmount, "stablecoin mismatch");
 
-        _sendBridgeMessage(ACTION_BUY, msg.sender, stableAmount);
+        if (fee > 0) {
+            stablecoin.safeTransfer(priceStrategy.feeCollector(), fee);
+        }
+
+        _sendBridgeMessage(ACTION_BUY, msg.sender, netAmount);
 
         // Settle queued redemptions and forward any excess liquidity.
         _processRedemptions(address(0), 0);
         forwardExcessToBridge();
         _mint(msg.sender, tokenAmount);
-        emit TokensBought(msg.sender, stableAmount, tokenAmount);
+        emit TokensBought(msg.sender, netAmount, tokenAmount);
     }
 
     /// @notice Redeem tokens for the underlying stablecoin through the bridge.
@@ -155,16 +166,22 @@ contract BackedToken is ERC20, Ownable {
     function redeem(uint256 tokenAmount) external {
         require(tokenAmount > 0, "amount zero");
 
-        uint256 price = oracle.getPrice();
+        (uint256 price, uint256 fee) = priceStrategy.redeemPrice();
         require(price > 0, "invalid price");
 
         uint256 stableAmount = (tokenAmount * price) / PRICE_PRECISION;
+        require(stableAmount > fee, "amount too small");
+        uint256 netAmount = stableAmount - fee;
 
         _burn(msg.sender, tokenAmount);
 
-        _sendBridgeMessage(ACTION_REDEEM, msg.sender, stableAmount);
-        _processRedemptions(msg.sender, stableAmount);
-        emit TokensRedeemed(msg.sender, tokenAmount, stableAmount);
+        if (fee > 0) {
+            stablecoin.safeTransfer(priceStrategy.feeCollector(), fee);
+        }
+
+        _sendBridgeMessage(ACTION_REDEEM, msg.sender, netAmount);
+        _processRedemptions(msg.sender, netAmount);
+        emit TokensRedeemed(msg.sender, tokenAmount, netAmount);
     }
 }
 
