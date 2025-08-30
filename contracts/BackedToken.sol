@@ -115,7 +115,8 @@ contract BackedToken is ERC20, Ownable {
         uint256 balance = stablecoin.balanceOf(address(this));
         if (balance > bufferThreshold + minBridgeAmount) {
             uint256 toBridge = balance - bufferThreshold;
-            stablecoin.safeIncreaseAllowance(address(bridge), toBridge);
+            stablecoin.safeApprove(address(bridge), 0);
+            stablecoin.safeApprove(address(bridge), toBridge);
             bridge.sendStable(address(stablecoin), toBridge);
         }
     }

@@ -8,18 +8,27 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 contract BridgeStub {
     using SafeERC20 for IERC20;
 
+    bool public shouldFail;
+
     event StableSent(address indexed token, address indexed from, uint256 amount);
     event StableReceived(address indexed token, address indexed to, uint256 amount);
     event MessageSent(bytes message);
 
+    /// @notice Configure whether bridge actions should revert.
+    function setShouldFail(bool _shouldFail) external {
+        shouldFail = _shouldFail;
+    }
+
     /// @notice Simulate sending stablecoins through the bridge.
     function sendStable(address token, uint256 amount) external {
+        require(!shouldFail, "bridge failed");
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         emit StableSent(token, msg.sender, amount);
     }
 
     /// @notice Simulate sending an arbitrary message through the bridge.
     function sendMessage(bytes calldata message) external {
+        require(!shouldFail, "bridge failed");
         emit MessageSent(message);
     }
 
