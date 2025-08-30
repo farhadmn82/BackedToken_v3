@@ -41,6 +41,40 @@ async function deployFixture() {
   return { owner, user, feeCollector, stablecoin, oracle, priceStrategy, bridge, backedToken };
 }
 
+// Fixture using a bridge that can be configured to fail
+async function deployFailingBridgeFixture() {
+  const [owner, feeCollector] = await ethers.getSigners();
+
+  const Stable = await ethers.getContractFactory("StablecoinMock");
+  const stablecoin = await Stable.deploy();
+  await stablecoin.waitForDeployment();
+
+  const Oracle = await ethers.getContractFactory("OracleStub");
+  const oracle = await Oracle.deploy(INITIAL_PRICE);
+  await oracle.waitForDeployment();
+
+  const PriceStrategy = await ethers.getContractFactory("PriceStrategy");
+  const priceStrategy = await PriceStrategy.deploy(oracle.target, feeCollector.address);
+  await priceStrategy.waitForDeployment();
+
+  const Bridge = await ethers.getContractFactory("BridgeStub");
+  const bridge = await Bridge.deploy();
+  await bridge.waitForDeployment();
+
+  const Backed = await ethers.getContractFactory("BackedToken");
+  const backedToken = await Backed.deploy(
+    stablecoin.target,
+    priceStrategy.target,
+    bridge.target
+  );
+  await backedToken.waitForDeployment();
+
+  const supply = ethers.parseUnits("2000", 18);
+  await stablecoin.mint(owner.address, supply);
+
+  return { owner, stablecoin, priceStrategy, bridge, backedToken };
+}
+
 describe("BackedToken", function () {
   it("retrieves price from oracle", async function () {
     const { oracle, owner } = await loadFixture(deployFixture);
@@ -250,6 +284,24 @@ describe("BackedToken", function () {
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount);
     await backedToken.connect(owner).withdrawBuffer(withdrawAmount);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(depositAmount - withdrawAmount);
+  });
+
+  it("does not leave allowance after failed bridge call", async function () {
+    const { owner, stablecoin, bridge, backedToken } = await loadFixture(
+      deployFailingBridgeFixture
+    );
+
+    const amount = ethers.parseUnits("100", 18);
+    await stablecoin.connect(owner).approve(backedToken.target, amount);
+    await backedToken.connect(owner).depositBuffer(amount);
+
+    await bridge.setShouldFail(true);
+
+    await expect(
+      backedToken.connect(owner).forwardExcessToBridge()
+    ).to.be.revertedWith("bridge failed");
+
+    expect(await stablecoin.allowance(backedToken.target, bridge.target)).to.equal(0n);
   });
 
   it("processes queued redemptions before forwarding excess", async function () {
