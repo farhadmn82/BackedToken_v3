@@ -33,6 +33,9 @@ async function deployFixture() {
   );
   await backedToken.waitForDeployment();
 
+  // Allow owner to act as bridge executor in tests
+  await backedToken.connect(owner).setBridgeExecutor(owner.address);
+
   // Mint stablecoins to user and owner for testing
   const supply = ethers.parseUnits("2000", 18);
   await stablecoin.mint(user.address, supply);
@@ -68,6 +71,8 @@ async function deployFailingBridgeFixture() {
     bridge.target
   );
   await backedToken.waitForDeployment();
+
+  await backedToken.connect(owner).setBridgeExecutor(owner.address);
 
   const supply = ethers.parseUnits("2000", 18);
   await stablecoin.mint(owner.address, supply);
@@ -170,12 +175,15 @@ describe("BackedToken", function () {
     const bridged = buyAmount - threshold;
 
     await expect(backedToken.connect(user).buy(buyAmount))
-      .to.emit(bridge, "StableSent")
-      .withArgs(stablecoin.target, backedToken.target, bridged)
-      .and.to.emit(bridge, "MessageSent")
+      .to.emit(bridge, "MessageSent")
       .withArgs(message)
       .and.to.emit(backedToken, "TokensBought")
-      .withArgs(user.address, buyAmount, expectedTokens);
+      .withArgs(user.address, buyAmount, expectedTokens)
+      .and.to.not.emit(bridge, "StableSent");
+
+    await expect(backedToken.connect(owner).forwardExcessToBridge())
+      .to.emit(bridge, "StableSent")
+      .withArgs(stablecoin.target, backedToken.target, bridged);
 
     expect(await backedToken.balanceOf(user.address)).to.equal(expectedTokens);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
@@ -199,12 +207,19 @@ describe("BackedToken", function () {
 
     await stablecoin.connect(user).approve(backedToken.target, firstBuy + secondBuy);
 
-    await expect(backedToken.connect(user).buy(firstBuy)).to.not.emit(bridge, "StableSent");
+    await expect(backedToken.connect(user).buy(firstBuy))
+      .to.not.emit(bridge, "StableSent");
+    await expect(backedToken.connect(owner).forwardExcessToBridge()).to.not.emit(
+      bridge,
+      "StableSent"
+    );
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(firstBuy);
     expect(await stablecoin.balanceOf(bridge.target)).to.equal(0);
 
     const expectedBridge = firstBuy + secondBuy - threshold;
     await expect(backedToken.connect(user).buy(secondBuy))
+      .to.not.emit(bridge, "StableSent");
+    await expect(backedToken.connect(owner).forwardExcessToBridge())
       .to.emit(bridge, "StableSent")
       .withArgs(stablecoin.target, backedToken.target, expectedBridge);
     expect(await stablecoin.balanceOf(backedToken.target)).to.equal(threshold);
@@ -233,6 +248,14 @@ describe("BackedToken", function () {
       const expectedTokens = (buyAmount * BigInt(1e18)) / price;
 
       await backedToken.connect(user).buy(buyAmount);
+      await expect(backedToken.connect(owner).forwardExcessToBridge()).to.not.emit(
+        bridge,
+        "StableSent"
+      );
+      await expect(backedToken.connect(owner).forwardExcessToBridge()).to.not.emit(
+        bridge,
+        "StableSent"
+      );
 
       const stableLiquidity = await stablecoin.balanceOf(backedToken.target);
       const bridgeBalance = await stablecoin.balanceOf(bridge.target);
@@ -319,6 +342,7 @@ describe("BackedToken", function () {
 
     await stablecoin.connect(owner).approve(backedToken.target, initialBuy);
     await backedToken.connect(owner).buy(initialBuy);
+    await backedToken.connect(owner).forwardExcessToBridge();
 
     const price = await oracle.getPrice();
     const tokens = (initialBuy * BigInt(1e18)) / price;
@@ -334,7 +358,11 @@ describe("BackedToken", function () {
     await stablecoin.connect(user).approve(backedToken.target, buyAmount);
 
     const expectedBridge = ethers.parseUnits("10", 18);
-    await expect(backedToken.connect(user).buy(buyAmount))
+    await expect(backedToken.connect(user).buy(buyAmount)).to.not.emit(
+      bridge,
+      "StableSent"
+    );
+    await expect(backedToken.connect(owner).forwardExcessToBridge())
       .to.emit(bridge, "StableSent")
       .withArgs(stablecoin.target, backedToken.target, expectedBridge);
 
@@ -358,6 +386,7 @@ describe("BackedToken", function () {
 
     await stablecoin.connect(user).approve(backedToken.target, buyAmount);
     await backedToken.connect(user).buy(buyAmount);
+    await backedToken.connect(owner).forwardExcessToBridge();
 
     const price = await oracle.getPrice();
     const expectedPayout = (redeemTokens * price) / BigInt(1e18);
@@ -390,6 +419,8 @@ describe("BackedToken", function () {
     const buyAmount = ethers.parseUnits("200", 18);
     await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
     await backedToken.connect(owner).buy(buyAmount);
+    await backedToken.connect(owner).forwardExcessToBridge();
+    await backedToken.connect(owner).forwardExcessToBridge();
 
     const bigTokens = ethers.parseUnits("50", 18);
     await backedToken.connect(owner).transfer(user.address, bigTokens);
@@ -457,6 +488,7 @@ describe("BackedToken", function () {
     const buyAmount = ethers.parseUnits("400", 18);
     await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
     await backedToken.connect(owner).buy(buyAmount);
+    await backedToken.connect(owner).forwardExcessToBridge();
 
     const price = await oracle.getPrice();
     const redeemTokens = ethers.parseUnits("10", 18);
