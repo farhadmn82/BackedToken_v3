@@ -35,7 +35,7 @@ contract BackedToken is ERC20, Ownable {
     IBridge public bridge;
 
     /// @notice Address of the off-chain service allowed to forward liquidity.
-    address public bridgeExecutor;
+    address public operator;
 
     /// @notice Maximum stablecoin amount to retain before forwarding to the bridge.
     uint256 public bufferThreshold;
@@ -51,7 +51,7 @@ contract BackedToken is ERC20, Ownable {
     event TokensRedeemed(address indexed redeemer, uint256 tokenAmount, uint256 stableAmount);
     event BufferThresholdUpdated(uint256 newThreshold);
     event MinBridgeAmountUpdated(uint256 newMin);
-    event BridgeExecutorUpdated(address newExecutor);
+    event OperatorUpdated(address newOperator);
 
     constructor(
         address stablecoinAddress,
@@ -81,16 +81,15 @@ contract BackedToken is ERC20, Ownable {
     }
 
     /// @notice Set the address permitted to forward buffer funds to the bridge.
-    function setBridgeExecutor(address executor) external onlyOwner {
-        bridgeExecutor = executor;
-        emit BridgeExecutorUpdated(executor);
+    function setOperator(address newOperator) external onlyOwner {
+        operator = newOperator;
+        emit OperatorUpdated(newOperator);
     }
 
     /// @notice Deposit stablecoins into the local liquidity buffer.
     function depositBuffer(uint256 amount) external onlyOwner {
         require(amount > 0, "amount zero");
         stablecoin.safeTransferFrom(msg.sender, address(this), amount);
-        _processRedemptions(address(0), 0);
     }
 
     /// @notice Withdraw stablecoins from the local liquidity buffer.
@@ -104,11 +103,14 @@ contract BackedToken is ERC20, Ownable {
         return redemptionQueue.length();
     }
 
-    /// @notice Process queued redemptions and optionally a new request using
-    /// available buffer liquidity.
+    /// @notice Exposed handler for the off-chain service to process queued
+    /// redemptions or enqueue a new request after buy or redeem events.
     /// @param redeemer Address requesting redemption (zero to process queue only).
     /// @param amount Amount requested for redemption.
-    function _processRedemptions(address redeemer, uint256 amount) internal {
+    function processRedemptions(address redeemer, uint256 amount)
+        external
+        onlyOperator
+    {
         RedemptionQueue.Redeem[] memory payouts = redemptionQueue.process(
             redeemer,
             amount,
@@ -120,13 +122,13 @@ contract BackedToken is ERC20, Ownable {
         }
     }
 
-    modifier onlyBridgeExecutor() {
-        require(msg.sender == bridgeExecutor, "not executor");
+    modifier onlyOperator() {
+        require(msg.sender == operator, "not operator");
         _;
     }
 
     /// @notice Forward excess buffer liquidity to the bridge.
-    function forwardExcessToBridge() external onlyBridgeExecutor {
+    function forwardExcessToBridge() external onlyOperator {
         uint256 balance = stablecoin.balanceOf(address(this));
         if (balance > bufferThreshold + minBridgeAmount) {
             uint256 toBridge = balance - bufferThreshold;
@@ -169,8 +171,6 @@ contract BackedToken is ERC20, Ownable {
 
         _sendBridgeMessage(ACTION_BUY, msg.sender, netAmount);
 
-        // Settle queued redemptions; excess forwarding occurs off-chain.
-        _processRedemptions(address(0), 0);
         _mint(msg.sender, tokenAmount);
         emit TokensBought(msg.sender, netAmount, tokenAmount);
     }
@@ -194,7 +194,6 @@ contract BackedToken is ERC20, Ownable {
         }
 
         _sendBridgeMessage(ACTION_REDEEM, msg.sender, netAmount);
-        _processRedemptions(msg.sender, netAmount);
         emit TokensRedeemed(msg.sender, tokenAmount, netAmount);
     }
 }
