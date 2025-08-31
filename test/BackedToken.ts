@@ -17,10 +17,6 @@ async function deployFixture() {
   const oracle = await Oracle.deploy(INITIAL_PRICE);
   await oracle.waitForDeployment();
 
-  const PriceStrategy = await ethers.getContractFactory("PriceStrategy");
-  const priceStrategy = await PriceStrategy.deploy(oracle.target, feeCollector.address);
-  await priceStrategy.waitForDeployment();
-
   const Bridge = await ethers.getContractFactory("BridgeStub");
   const bridge = await Bridge.deploy();
   await bridge.waitForDeployment();
@@ -28,7 +24,8 @@ async function deployFixture() {
   const Backed = await ethers.getContractFactory("BackedToken");
   const backedToken = await Backed.deploy(
     stablecoin.target,
-    priceStrategy.target,
+    oracle.target,
+    feeCollector.address,
     bridge.target
   );
   await backedToken.waitForDeployment();
@@ -41,7 +38,7 @@ async function deployFixture() {
   await stablecoin.mint(user.address, supply);
   await stablecoin.mint(owner.address, supply);
 
-  return { owner, user, feeCollector, stablecoin, oracle, priceStrategy, bridge, backedToken };
+  return { owner, user, feeCollector, stablecoin, oracle, bridge, backedToken };
 }
 
 // Fixture using a bridge that can be configured to fail
@@ -56,10 +53,6 @@ async function deployFailingBridgeFixture() {
   const oracle = await Oracle.deploy(INITIAL_PRICE);
   await oracle.waitForDeployment();
 
-  const PriceStrategy = await ethers.getContractFactory("PriceStrategy");
-  const priceStrategy = await PriceStrategy.deploy(oracle.target, feeCollector.address);
-  await priceStrategy.waitForDeployment();
-
   const Bridge = await ethers.getContractFactory("BridgeStub");
   const bridge = await Bridge.deploy();
   await bridge.waitForDeployment();
@@ -67,7 +60,8 @@ async function deployFailingBridgeFixture() {
   const Backed = await ethers.getContractFactory("BackedToken");
   const backedToken = await Backed.deploy(
     stablecoin.target,
-    priceStrategy.target,
+    oracle.target,
+    feeCollector.address,
     bridge.target
   );
   await backedToken.waitForDeployment();
@@ -77,7 +71,7 @@ async function deployFailingBridgeFixture() {
   const supply = ethers.parseUnits("2000", 18);
   await stablecoin.mint(owner.address, supply);
 
-  return { owner, stablecoin, priceStrategy, bridge, backedToken };
+  return { owner, stablecoin, bridge, backedToken };
 }
 
 describe("BackedToken", function () {
@@ -102,14 +96,13 @@ describe("BackedToken", function () {
       .withArgs(minBridge);
   });
 
-  it("applies spreads and fees via PriceStrategy", async function () {
+  it("applies spreads and fees", async function () {
     const {
       owner,
       user,
       feeCollector,
       stablecoin,
       oracle,
-      priceStrategy,
       backedToken,
     } = await loadFixture(deployFixture);
 
@@ -118,10 +111,9 @@ describe("BackedToken", function () {
     const buyFee = ethers.parseUnits("1", 18);
     const redeemFee = ethers.parseUnits("2", 18);
 
-    await priceStrategy.connect(owner).setBuySpread(buySpread);
-    await priceStrategy.connect(owner).setRedeemSpread(redeemSpread);
-    await priceStrategy.connect(owner).setBuyFee(buyFee);
-    await priceStrategy.connect(owner).setRedeemFee(redeemFee);
+    await backedToken
+      .connect(owner)
+      .setPricingParameters(buySpread, redeemSpread, buyFee, redeemFee);
 
     // Keep all stablecoins in contract for redemption
     const highThreshold = ethers.parseUnits("1000", 18);
