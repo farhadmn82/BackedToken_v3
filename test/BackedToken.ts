@@ -420,7 +420,6 @@ describe("BackedToken", function () {
     await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
     await backedToken.connect(owner).buy(buyAmount);
     await backedToken.connect(owner).forwardExcessToBridge();
-    await backedToken.connect(owner).forwardExcessToBridge();
 
     const bigTokens = ethers.parseUnits("50", 18);
     await backedToken.connect(owner).transfer(user.address, bigTokens);
@@ -460,6 +459,7 @@ describe("BackedToken", function () {
     const buyAmount = ethers.parseUnits("200", 18);
     await stablecoin.connect(owner).approve(backedToken.target, buyAmount);
     await backedToken.connect(owner).buy(buyAmount);
+    await backedToken.connect(owner).forwardExcessToBridge();
 
     const bigTokens = ethers.parseUnits("50", 18);
     await backedToken.connect(owner).transfer(user.address, bigTokens);
