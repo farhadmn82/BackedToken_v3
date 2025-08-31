@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./PriceStrategy.sol";
+import "./OracleStub.sol";
 import "./RedemptionQueue.sol";
 
 interface IBridge {
@@ -31,7 +31,8 @@ contract BackedToken is ERC20, Ownable {
     uint256 private constant MAX_REDEMPTIONS_PER_CALL = 5;
 
     IERC20 public immutable stablecoin;
-    PriceStrategy public priceStrategy;
+    OracleStub public oracle;
+    address public feeCollector;
     IBridge public bridge;
 
     /// @notice Address of the off-chain service allowed to forward liquidity.
@@ -52,36 +53,73 @@ contract BackedToken is ERC20, Ownable {
     event BufferThresholdUpdated(uint256 newThreshold);
     event MinBridgeAmountUpdated(uint256 newMin);
     event OperatorUpdated(address newOperator);
+    event FeeCollectorUpdated(address newCollector);
+    event PricingParamsUpdated(
+        uint256 buySpread,
+        uint256 redeemSpread,
+        uint256 buyFee,
+        uint256 redeemFee
+    );
+
+    uint256 public buySpread; // e.g. 0.01 * 1e18 for 1%
+    uint256 public redeemSpread; // e.g. 0.01 * 1e18 for 1%
+    uint256 public buyFee; // fixed stablecoin amount
+    uint256 public redeemFee; // fixed stablecoin amount
 
     constructor(
         address stablecoinAddress,
-        address priceStrategyAddress,
+        address oracleAddress,
+        address feeCollectorAddress,
         address bridgeAddress
     ) ERC20(NAME, SYMBOL) Ownable(msg.sender) {
+        require(stablecoinAddress != address(0), "stablecoin zero");
+        require(oracleAddress != address(0), "oracle zero");
+        require(feeCollectorAddress != address(0), "collector zero");
+        require(bridgeAddress != address(0), "bridge zero");
         stablecoin = IERC20(stablecoinAddress);
-        priceStrategy = PriceStrategy(priceStrategyAddress);
+        oracle = OracleStub(oracleAddress);
+        feeCollector = feeCollectorAddress;
         bridge = IBridge(bridgeAddress);
     }
 
-    /// @notice Set the price strategy module.
-    function setPriceStrategy(address strategy) external onlyOwner {
-        priceStrategy = PriceStrategy(strategy);
+    /// @notice Set the fee collector address.
+    function setFeeCollector(address collector) external onlyOwner {
+        require(collector != address(0), "collector zero");
+        feeCollector = collector;
+        emit FeeCollectorUpdated(collector);
+    }
+
+    /// @notice Set spreads and fees for buy and redeem operations.
+    function setPricingParameters(
+        uint256 _buySpread,
+        uint256 _redeemSpread,
+        uint256 _buyFee,
+        uint256 _redeemFee
+    ) external onlyOwner {
+        buySpread = _buySpread;
+        redeemSpread = _redeemSpread;
+        buyFee = _buyFee;
+        redeemFee = _redeemFee;
+        emit PricingParamsUpdated(_buySpread, _redeemSpread, _buyFee, _redeemFee);
     }
 
     /// @notice Set the buffer threshold used when accumulating stablecoins.
     function setBufferThreshold(uint256 threshold) external onlyOwner {
+        require(threshold > 0, "threshold zero");
         bufferThreshold = threshold;
         emit BufferThresholdUpdated(threshold);
     }
 
     /// @notice Set the minimum amount of stablecoin to send through the bridge.
     function setMinBridgeAmount(uint256 amount) external onlyOwner {
+        require(amount > 0, "amount zero");
         minBridgeAmount = amount;
         emit MinBridgeAmountUpdated(amount);
     }
 
     /// @notice Set the address permitted to forward buffer funds to the bridge.
     function setOperator(address newOperator) external onlyOwner {
+        require(newOperator != address(0), "operator zero");
         operator = newOperator;
         emit OperatorUpdated(newOperator);
     }
@@ -147,12 +185,24 @@ contract BackedToken is ERC20, Ownable {
         bridge.sendMessage(message);
     }
 
+    function _buyPrice() internal view returns (uint256 price, uint256 fee) {
+        uint256 base = oracle.getPrice();
+        price = base + (base * buySpread) / PRICE_PRECISION;
+        fee = buyFee;
+    }
+
+    function _redeemPrice() internal view returns (uint256 price, uint256 fee) {
+        uint256 base = oracle.getPrice();
+        price = base - (base * redeemSpread) / PRICE_PRECISION;
+        fee = redeemFee;
+    }
+
     /// @notice Buy tokens with the underlying stablecoin.
     /// @param stableAmount Amount of stablecoin to spend.
     function buy(uint256 stableAmount) external {
         require(stableAmount > 0, "amount zero");
 
-        (uint256 price, uint256 fee) = priceStrategy.buyPrice();
+        (uint256 price, uint256 fee) = _buyPrice();
         require(price > 0, "invalid price");
         require(stableAmount > fee, "amount too small");
 
@@ -166,7 +216,7 @@ contract BackedToken is ERC20, Ownable {
         require(received == stableAmount, "stablecoin mismatch");
 
         if (fee > 0) {
-            stablecoin.safeTransfer(priceStrategy.feeCollector(), fee);
+            stablecoin.safeTransfer(feeCollector, fee);
         }
 
         _sendBridgeMessage(ACTION_BUY, msg.sender, netAmount);
@@ -180,7 +230,7 @@ contract BackedToken is ERC20, Ownable {
     function redeem(uint256 tokenAmount) external {
         require(tokenAmount > 0, "amount zero");
 
-        (uint256 price, uint256 fee) = priceStrategy.redeemPrice();
+        (uint256 price, uint256 fee) = _redeemPrice();
         require(price > 0, "invalid price");
 
         uint256 stableAmount = (tokenAmount * price) / PRICE_PRECISION;
@@ -190,7 +240,7 @@ contract BackedToken is ERC20, Ownable {
         _burn(msg.sender, tokenAmount);
 
         if (fee > 0) {
-            stablecoin.safeTransfer(priceStrategy.feeCollector(), fee);
+            stablecoin.safeTransfer(feeCollector, fee);
         }
 
         _sendBridgeMessage(ACTION_REDEEM, msg.sender, netAmount);
