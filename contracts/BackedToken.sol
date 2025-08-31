@@ -34,6 +34,9 @@ contract BackedToken is ERC20, Ownable {
     PriceStrategy public priceStrategy;
     IBridge public bridge;
 
+    /// @notice Address of the off-chain service allowed to forward liquidity.
+    address public bridgeExecutor;
+
     /// @notice Maximum stablecoin amount to retain before forwarding to the bridge.
     uint256 public bufferThreshold;
 
@@ -48,6 +51,7 @@ contract BackedToken is ERC20, Ownable {
     event TokensRedeemed(address indexed redeemer, uint256 tokenAmount, uint256 stableAmount);
     event BufferThresholdUpdated(uint256 newThreshold);
     event MinBridgeAmountUpdated(uint256 newMin);
+    event BridgeExecutorUpdated(address newExecutor);
 
     constructor(
         address stablecoinAddress,
@@ -74,6 +78,12 @@ contract BackedToken is ERC20, Ownable {
     function setMinBridgeAmount(uint256 amount) external onlyOwner {
         minBridgeAmount = amount;
         emit MinBridgeAmountUpdated(amount);
+    }
+
+    /// @notice Set the address permitted to forward buffer funds to the bridge.
+    function setBridgeExecutor(address executor) external onlyOwner {
+        bridgeExecutor = executor;
+        emit BridgeExecutorUpdated(executor);
     }
 
     /// @notice Deposit stablecoins into the local liquidity buffer.
@@ -110,8 +120,13 @@ contract BackedToken is ERC20, Ownable {
         }
     }
 
+    modifier onlyBridgeExecutor() {
+        require(msg.sender == bridgeExecutor, "not executor");
+        _;
+    }
+
     /// @notice Forward excess buffer liquidity to the bridge.
-    function forwardExcessToBridge() public {
+    function forwardExcessToBridge() external onlyBridgeExecutor {
         uint256 balance = stablecoin.balanceOf(address(this));
         if (balance > bufferThreshold + minBridgeAmount) {
             uint256 toBridge = balance - bufferThreshold;
@@ -154,9 +169,8 @@ contract BackedToken is ERC20, Ownable {
 
         _sendBridgeMessage(ACTION_BUY, msg.sender, netAmount);
 
-        // Settle queued redemptions and forward any excess liquidity.
+        // Settle queued redemptions; excess forwarding occurs off-chain.
         _processRedemptions(address(0), 0);
-        forwardExcessToBridge();
         _mint(msg.sender, tokenAmount);
         emit TokensBought(msg.sender, netAmount, tokenAmount);
     }
