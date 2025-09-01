@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./OracleStub.sol";
+import "./IPriceOracle.sol";
 import "./RedemptionQueue.sol";
 
 interface IBridge {
@@ -31,7 +31,7 @@ contract BackedToken is ERC20, Ownable {
     uint256 private constant MAX_REDEMPTIONS_PER_CALL = 5;
 
     IERC20 public immutable stablecoin;
-    OracleStub public oracle;
+    IPriceOracle public oracle;
     address public feeCollector;
     IBridge public bridge;
 
@@ -54,6 +54,8 @@ contract BackedToken is ERC20, Ownable {
     event MinBridgeAmountUpdated(uint256 newMin);
     event OperatorUpdated(address newOperator);
     event FeeCollectorUpdated(address newCollector);
+    event OracleUpdated(address newOracle);
+    event BridgeUpdated(address newBridge);
     event PricingParamsUpdated(
         uint256 buySpread,
         uint256 redeemSpread,
@@ -77,7 +79,7 @@ contract BackedToken is ERC20, Ownable {
         require(feeCollectorAddress != address(0), "collector zero");
         require(bridgeAddress != address(0), "bridge zero");
         stablecoin = IERC20(stablecoinAddress);
-        oracle = OracleStub(oracleAddress);
+        oracle = IPriceOracle(oracleAddress);
         feeCollector = feeCollectorAddress;
         bridge = IBridge(bridgeAddress);
     }
@@ -115,6 +117,20 @@ contract BackedToken is ERC20, Ownable {
         require(amount > 0, "amount zero");
         minBridgeAmount = amount;
         emit MinBridgeAmountUpdated(amount);
+    }
+
+    /// @notice Set the oracle contract address.
+    function setOracle(address oracleAddress) external onlyOwner {
+        require(oracleAddress != address(0), "oracle zero");
+        oracle = IPriceOracle(oracleAddress);
+        emit OracleUpdated(oracleAddress);
+    }
+
+    /// @notice Set the bridge contract address.
+    function setBridge(address bridgeAddress) external onlyOwner {
+        require(bridgeAddress != address(0), "bridge zero");
+        bridge = IBridge(bridgeAddress);
+        emit BridgeUpdated(bridgeAddress);
     }
 
     /// @notice Set the address permitted to forward buffer funds to the bridge.
